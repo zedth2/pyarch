@@ -8,8 +8,8 @@ Author : Zachary Harvey
 
 
 '''
-import sysdboot
-import grubtwo
+from . import sysdboot
+from . import grubtwo
 
 OPTIONS = {
             'systemd-boot' : sysdboot.runsysdboot,

@@ -9,6 +9,7 @@ Author : Zachary Harvey
 
 '''
 from os.path import isfile
+from os import makedirs
 
 DEFAULT_LOADER = 'default arch\ntimeout 5\neditor 0\n'
 
@@ -22,15 +23,17 @@ def sysdbootinstall(system, bootdir='/boot'):
 
 
 def setuploader(system, bootdir='/boot'):
+    makedirs(system.mnt + bootdir + '/loader/', exist_ok=True)
     loader = system.mnt + bootdir + '/loader/loader.conf'
-    if isfile(system.mnt + bootdir + '/loader/loader.conf'):
+    if isfile(loader):
         return 2
     open(loader, 'w').write(DEFAULT_LOADER)
     return 1
 
 def setupentry(system, bootdir='/boot'):
+    makedirs(system.mnt + bootdir + '/loader/entries', exist_ok=True)
     entry = system.mnt + bootdir + '/loader/entries/arch.conf'
-    content = DEFAULT_ENTRY.format(DRIVE=system.config['device'])
+    content = DEFAULT_ENTRY.format(DRIVE=system.config['booter']['device'])
     if isfile(entry):
         return 2
     open(entry, 'w').write(content)
