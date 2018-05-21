@@ -45,3 +45,18 @@ def printColor(clr, *args, **kwargs):
     print(clr, sep='', end='')
     print(*args, **kwargs)
     print(ENDC, sep='', end='')
+
+
+
+class ExecutionError(Exception):
+    def __init__(self, returnCode, stdout, stderr):
+        super().__init__()
+        self.returnCode = returnCode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+    @staticmethod
+    def checkAndRaise(returnCode, stdout, stderr):
+        if 0 != returnCode:
+            raise ExecutionError(returnCode, stdout, stderr)

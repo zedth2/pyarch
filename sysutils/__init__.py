@@ -37,7 +37,7 @@ class SystemSetup:
         self.config = config
 
 
-    def popenobj(self, *args, chroot=True, stdout=subprocess.PIPE):
+    def popenobj(self, *args, chroot=True, stdout=subprocess.PIPE, shell=False):
         usercmd = list(args)
         if 1 == len(args):
             usercmd = shlex.split(args[0])
@@ -45,11 +45,11 @@ class SystemSetup:
             raise ValueError('No command to execute')
         if chroot:
             usercmd = self.chroot_list() + usercmd
-        return subprocess.Popen(usercmd, stdout=stdout, stderr=subprocess.PIPE)
+        return subprocess.Popen(usercmd, stdout=stdout, stderr=subprocess.PIPE, shell=shell)
 
-    def exec_chroot(self, *args, chroot=True, stdout=subprocess.PIPE):
+    def exec_chroot(self, *args, chroot=True, stdout=subprocess.PIPE, shell=False):
         debug('Running Command : ', *args)
-        pop = self.popenobj(*args, chroot=chroot, stdout=stdout)
+        pop = self.popenobj(*args, chroot=chroot, stdout=stdout, shell=shell)
         stdout, stderr = pop.communicate()
         return (pop.returncode, stdout, stderr)
 
