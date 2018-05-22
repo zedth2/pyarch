@@ -33,14 +33,14 @@ import re
 Error: You requested a partition from 0B to 100MB (sectors 0..195312).
 The closest location we can manage is 17.4kB to 100MB (sectors 34..195312).
 '''
-REGEX_PART_BEGIN = re.compile('''Error: You requested a partition from [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) to [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) \(sectors [0-9]+..[0-9]+\).
-The closest location we can manage is [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) to [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) \(sectors ([0-9]+)..[0-9]+\).
+REGEX_PART_BEGIN = re.compile('''Error: You requested a partition from [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) to [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) \(sectors ([0-9]+)..([0-9]+)\).
+The closest location we can manage is [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) to [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) \(sectors ([0-9]+)..([0-9]+)\).
 ''')
 
 from sysinfo.disks import Disk
 from ..helpers import ExecutionError
 from glob import glob
-
+from distutils import spawn
 
 PART_TYPES = ['primary', 'logical', 'extended']
 PART_TYPES_PRIMARY = PART_TYPES[0]
@@ -72,8 +72,9 @@ LABEL_MSDOS = LABELS[7]
 LABEL_PC98 = LABELS[8]
 LABEL_SUN = LABELS[9]
 
-SIZES = ['s', 'B', 'kB', 'MB', 'MiB', 'GB', 'GiB', 'TB', 'TiB']
 SIZE_BYTE = 'B'
+SIZE_SECTOR = 's'
+SIZES = [SIZE_SECTOR, SIZE_BYTE, 'kB', 'MB', 'MiB', 'GB', 'GiB', 'TB', 'TiB']
 
 EXPONENTS = {
     SIZE_BYTE:    1,       # byte
@@ -195,20 +196,24 @@ class Partition:
         return self.__type
     type = property(__gettype, __settype)
 
-    def createPart(self, system, partcmd, curpart, curpos):
+    def createPart(self, system, partcmd, curpart, curpos, end=None):
         self.__tries += 1
         start = str(curpos) + SIZE_BYTE
-        newCurPos = toBytes(self.size, self.unit) + curpos
-        end = str(newCurPos) + SIZE_BYTE
+        newCurPos = end
+        if end is None:
+            newCurPos = self.toBytes(self.size, self.unit) + (curpos if self.size >= 0 else 0)
+            end = str(newCurPos) + SIZE_BYTE
+        else:
+            end = str(end) + SIZE_BYTE
         mkpart = ['mkpart', self.type, self.fs, start, end]
         recode, stdout, stderr = system.exec_chroot(*partcmd, *mkpart, chroot=False)
         if 0 != recode:
             if self.__tries > 2: #Yeah if we've already tried it more than twice it's another error I don't know about
                 raise ExecutionError(recode, stdout, stderr)
-            newBegin = self.beginPartErr(stderr.decode())
-            if newBegin is None: #Then I don't know what went wrong
+            err = self.beginPartErr(stderr.decode())
+            if err is None: #Then I don't know what went wrong
                 raise ExecutionError(recode, stdout, stderr)
-            return self.createPart(system, partcmd, curpart, newBegin)
+            return self.createPart(system, partcmd, curpart, err['start'], err['end'])
 
         if self.name:
             mkpart = ['name', str(curpart), self.name]
@@ -223,8 +228,19 @@ class Partition:
         beg = REGEX_PART_BEGIN.match(stderr)
         if beg is None:
             return beg
-        return int(beg.groups()[0]) * self.parDisk.logicalBlockSize
+        #return int(beg.groups()[0]) * self.parDisk.logicalBlockSize
+        return {"start" : int(beg.groups()[2]) * self.parDisk.logicalBlockSize,
+                "end" : int(beg.groups()[3]) * self.parDisk.logicalBlockSize}
 
+    def toBytes(self, size, units):
+        if units == SIZE_SECTOR:
+            size = size * self.parDisk.logicalBlockSize
+            units = SIZE_BYTE
+        if size < 0:
+            s = toBytes(size * -1, units)
+            return self.parDisk.totalSize - s
+
+        return toBytes(size, units)
 
     @staticmethod
     def parseSize(size):
@@ -234,13 +250,13 @@ class Partition:
         unit = ''
         cnt = 0
         while cnt < len(size):
-            if size[cnt].isdigit():
+            if size[cnt].isdigit() or size[cnt] == '-':
                 num += size[cnt]
             else:
                 break
             cnt += 1
 
-        return num, size[cnt:]
+        return float(num), size[cnt:]
 
     @classmethod
     def fromDict(cls, dct, parentDisk):
@@ -268,6 +284,8 @@ class Partition:
 
 
 
+def depCheck(system):
+    path = spawn.find_executable('parted')
 
 
 

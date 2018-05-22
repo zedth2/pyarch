@@ -37,6 +37,14 @@ class Disk:
         size = open(path).readlines()
         return int(size[0].strip())
 
+    @property
+    def totalSize(self):
+        '''
+        Returns the disk size in bytes.
+        '''
+        path = (SYSFS_BLOCK_PATH + '/device/block/{disk}/size').format(disk=self.disk)
+        size = open(path).readlines()
+        return int(size[0].strip()) * self.logicalBlockSize
 
     @property
     def getDevPath(self):
