@@ -60,3 +60,4 @@ class ExecutionError(Exception):
     def checkAndRaise(returnCode, stdout, stderr):
         if 0 != returnCode:
             raise ExecutionError(returnCode, stdout, stderr)
+        return returnCode, stdout, stderr

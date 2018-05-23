@@ -13,12 +13,14 @@ to parted. Also may support percentages.
                 'size' : '100MiB',   #Required
                 'name' : 'BOOT',  #Defaults to none
                 'flag' : 'boot',  #Defaults to none
-                'type' : 'primary'  #Defaults to primary
+                'type' : 'primary',  #Defaults to primary
+                'mount' : '/boot',
                 },
                 {'fs':'ext3',
                 'size' : '50GiB',
                 'name' : 'ROOT',
-                'type' : 'primary'
+                'type' : 'primary',
+                'mount' : '/',
                 }
               ]
 }
@@ -37,10 +39,11 @@ REGEX_PART_BEGIN = re.compile('''Error: You requested a partition from [0-9.]+(?
 The closest location we can manage is [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) to [0-9.]+(?:B|kB|MB|GB|TB|PB|EB|ZB|YB|KiB|MiB|GiB|TiB|PiB|EiB|ZiB|YiB) \(sectors ([0-9]+)..([0-9]+)\).
 ''')
 
-from sysinfo.disks import Disk
-from ..helpers import ExecutionError
+from sysinfo.disks import Disk, DEV_PATH
+from ..helpers import ExecutionError, debug
 from glob import glob
 from distutils import spawn
+from os.path import exists
 
 PART_TYPES = ['primary', 'logical', 'extended']
 PART_TYPES_PRIMARY = PART_TYPES[0]
@@ -96,6 +99,16 @@ EXPONENTS = {
     "ZiB":  1024**7, # zebibyte
     "YiB":  1024**8  # yobibyte
 }
+
+MKFS_CMD = {
+    'ext2' : ['mkfs.ext2'],
+    'ext3' : ['mkfs.ext3'],
+    'ext4' : ['mkfs.ext4'],
+    'fat16' : ['mkfs.vfat', '-F', '16'],
+    'fat32' : ['mkfs.vfat', '-F', '32'],
+    'ntfs' : ['mkfs.ntfs']
+}
+
 def toBytes(size, units):
     return float(size) * EXPONENTS[units]
 
@@ -168,6 +181,7 @@ class Partition:
         self.type = type
         self.flag = flag
         self.name = name
+        self.path = None
 
         self.__tries = 0
 
@@ -221,8 +235,18 @@ class Partition:
         if self.flag:
             mkpart = ['set', str(curpart), self.flag]
             ExecutionError.checkAndRaise(*system.exec_chroot(*partcmd, *mkpart, chroot=False))
-
+        path = (DEV_PATH+str(curpart)).format(disk=self.parDisk.disk)
+        if not exists(path):
+            path = None
+        else:
+            self.path = path
+            self.createFileSystem(system, self.path)
         return newCurPos
+
+    def createFileSystem(self, system, path):
+        if self.fs not in MKFS_CMD.keys():
+            raise ValueError(self.fs + ' not in supported file system')
+        ExecutionError.checkAndRaise(*system.exec_chroot(*MKFS_CMD[self.fs], path, chroot=False))
 
     def beginPartErr(self, stderr):
         beg = REGEX_PART_BEGIN.match(stderr)
