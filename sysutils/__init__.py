@@ -99,6 +99,7 @@ class SystemSetup:
                      'device':'/dev/sda',
                      'bootdir':'/boot'
                     },
+            'disks' : [],
         }
 
 
