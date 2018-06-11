@@ -14,7 +14,7 @@ to parted. Also may support percentages.
                 'name' : 'BOOT',  #Defaults to none
                 'flag' : 'boot',  #Defaults to none
                 'type' : 'primary',  #Defaults to primary
-                'mount' : '/boot',
+                'mount' : '/boot', #Required
                 },
                 {'fs':'ext3',
                 'size' : '50GiB',
@@ -44,6 +44,7 @@ from ..helpers import ExecutionError, debug
 from glob import glob
 from distutils import spawn
 from os.path import exists
+from os import makedirs
 
 PART_TYPES = ['primary', 'logical', 'extended']
 PART_TYPES_PRIMARY = PART_TYPES[0]
@@ -112,6 +113,106 @@ MKFS_CMD = {
 def toBytes(size, units):
     return float(size) * EXPONENTS[units]
 
+class FileSystemTree:
+    def __init__(self, partition=None, children=[]):
+        self.children = []
+        self.partition = None
+
+    def is_deep_parent_of(self, childPart, add=True):
+        isc = self.is_parent_of(childPart, add)
+        if isc: return isc
+        cnt = 0
+        while cnt < len(self.children) and not isc:
+            isc = self.children[cnt].is_deep_parent_of(childPart, add)
+            cnt += 1
+        if not isc:
+            isc = self.is_parent_of(childPart, add)
+        return isc
+
+    def is_parent_of(self, childPart, add=True):
+        isc = False
+        if not childPart.mount:
+            raise ValueError('Child mount path is empty')
+        if childPart.mount.startswith(self.partition.mount) and childPart.mount != self.partition.mount:
+            isc = True
+            if add:
+                self.children.append(childPart)
+        return isc
+
+    def is_deep_child_of(self, parentPart, add=True):
+        isp = False
+
+    def is_child_of(self, parentPart):
+        if not parentPart.mount:
+            raise ValueError('Parent mount path is empty')
+        return (self.mount.startswith(parentPart.partition.mount) and parentPart.mount != self.partition.mount)
+
+
+def FindShallow(partitions):
+    if len(partitions) == 1:
+        return partitions[0]
+    elif len(partitions) == 0:
+        raise ValueError('No partitions given')
+    cur = partitions[0]
+    curset = set(partitions[0].mount.split('/'))
+    for p in partitions:
+        if p.path == '/':
+            return p
+
+class FileSystem:
+    def __init__(self, devs=[], rootMnt='/mnt'):
+        self.devices = devs
+        self.rootmnt = rootMnt
+
+    def find_lowest(self):
+        topart = None
+        for d in self.devices:
+            topart = d.find_lowest(topart)
+            if topart.mount == '/':
+                return topart
+
+    def find_mount_order(self):
+        parts = {}
+        for d in self.devices:
+            for p in d.parts:
+                ind = -1
+                if p.mount == '/':
+                    ind = 0
+                else:
+                    ind = p.mount.count('/')
+                if ind == -1:
+                    raise Exception("Something went wrong mounting")
+                elif ind in parts:
+                    parts[ind].append(p)
+                else:
+                    parts[ind] = [p]
+        return parts
+
+    @classmethod
+    def fromDict(cls, dct, rootMnt='/mnt'):
+        devices = []
+        items = dct
+        if isinstance(dct, dict):
+            items = dct['disks']
+        elif not isinstance(dct, (list, tuple)):
+            raise TypeError('Expecting an array of disks or a dictionary with keys disks')
+        for d in items:
+            devices.append(Device.fromDict(d))
+        return cls(devices, rootMnt)
+
+    def createall(self, system):
+        for d in self.devices:
+            d.create(system)
+
+    def mountall(self, system):
+        parts = self.find_mount_order()
+        keys = list(parts.keys())
+        keys.sort()
+        for k in keys:
+            for p in parts[k]:
+                p.mountpart(system, self.rootmnt)
+
+
 class Device:
     def __init__(self, disk, label):
         self.disk = Disk(disk)
@@ -165,16 +266,40 @@ class Device:
             curPart += 1
         return True
 
+    def mount(self, system):
+        if not len(self.parts):
+            raise ValueError('There are no partitions listed')
+
+    def find_lowest(self, currentpart=None):
+        if not len(self.parts): return currentpart
+        topart = currentpart
+        cnt = 0
+        if topart is None:
+            cnt = 1
+            topart = self.parts[0]
+        while len(self.parts) > cnt:
+            p = self.parts[cnt]
+            if p.mount == '' or not p.mount:
+                cnt += 1
+                continue
+            if p.mount == '/':
+                return p
+            if topart.count('/') > p.count('/'):
+                topart = p
+            cnt += 1
+        return topart
+
     @classmethod
     def fromDict(cls, dct):
         new = cls(dct['device'], dct['label'])
         for p in dct['partition']:
-            new.addpart(Partition.fromDict(p, new.disk))
+            if p['size'] and ('path' not in p or p['path'] == ''):
+                new.addpart(Partition.fromDict(p, new.disk))
         return new
 
 
 class Partition:
-    def __init__(self, parentDisk, size, fs, name='', type=PART_TYPES_PRIMARY, flag=''):
+    def __init__(self, parentDisk, size, fs, name='', type=PART_TYPES_PRIMARY, flag='', mount=None):
         self.parDisk = parentDisk
         self.size, self.unit = Partition.parseSize(size)
         self.fs = fs
@@ -182,6 +307,8 @@ class Partition:
         self.flag = flag
         self.name = name
         self.path = None
+        self.mount = mount
+        self.ismounted = False
 
         self.__tries = 0
 
@@ -211,6 +338,10 @@ class Partition:
     type = property(__gettype, __settype)
 
     def createPart(self, system, partcmd, curpart, curpos, end=None):
+        if self.path:
+            raise ValueError('Can not partition disk if partition is already labeled in config.')
+        elif not self.size:
+            raise ValueError('A partition size is required.')
         self.__tries += 1
         start = str(curpos) + SIZE_BYTE
         newCurPos = end
@@ -256,6 +387,16 @@ class Partition:
         return {"start" : int(beg.groups()[2]) * self.parDisk.logicalBlockSize,
                 "end" : int(beg.groups()[3]) * self.parDisk.logicalBlockSize}
 
+    def mountpart(self, system, rootmnt):
+        if self.mount != '/':
+            pass
+        mntpnt = rootmnt + self.mount
+        makedirs(mntpnt, exist_ok=True)
+        ExecutionError.checkAndRaise(*system.exec_chroot('mount', self.path, mntpnt, chroot=False))
+
+
+
+
     def toBytes(self, size, units):
         if units == SIZE_SECTOR:
             size = size * self.parDisk.logicalBlockSize
@@ -289,6 +430,7 @@ class Partition:
         name = ''
         type = PART_TYPES_PRIMARY
         flag = ''
+        mount = ''
         try:
             name = dct['name']
         except KeyError:
@@ -304,7 +446,12 @@ class Partition:
         except KeyError:
             pass
 
-        return cls(parentDisk, size, fs, name, type, flag)
+        try:
+            mount = dct['mount']
+        except KeyError:
+            pass
+
+        return cls(parentDisk, size, fs, name, type, flag, mount)
 
 
 
