@@ -3,7 +3,8 @@ Arch Linux Install scripts
 
 
 # Examples
-```json
+
+```python
 {
     "hostname":"localhost",
     "keymap": "us",
